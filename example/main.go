@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Badmunda05/meowbox"
+	"github.com/Badmunda05/MeowBoxGo"
 )
 
 func main() {
