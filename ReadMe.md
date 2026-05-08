@@ -90,22 +90,6 @@ go run main.go file1.jpg file2.mp4
 
 ---
 
-## Publishing a New Version
-
-Go does not require submitting to any registry. Just push to GitHub and tag a release:
-
-```bash
-git init
-git add .
-git commit -m "first release"
-git remote add origin https://github.com/Badmunda05/meowbox.git
-git push -u origin main
-
-# Tag the version
-git tag v1.0.0
-git push origin v1.0.0
-```
-
 Users can then install it with:
 
 ```bash
