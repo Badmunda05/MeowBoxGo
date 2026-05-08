@@ -14,7 +14,7 @@ import (
 
 const meowboxURL = "https://files.tgvibes.online/upload"
 
-// uploadResponse is the JSON response from the MeowBox API.
+// uploadResponse represents the API response.
 type uploadResponse struct {
 	Success     bool   `json:"success"`
 	Description string `json:"description"`
@@ -23,64 +23,84 @@ type uploadResponse struct {
 	} `json:"files"`
 }
 
-// UploadFile uploads a file from a bytes.Buffer to MeowBox.
-// The fileName parameter specifies the name of the file to be uploaded.
-// The timeout parameter specifies how long the client should wait for the server to respond.
-// The function returns the direct URL of the uploaded file or an error if the upload failed.
-func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration) (string, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+// FileEntry holds file data for multi-upload.
+type FileEntry struct {
+	Buffer   *bytes.Buffer
+	FileName string
+}
 
-	if part, err := writer.CreateFormFile("files[]", fileName); err != nil {
+// UploadFile uploads a single file and returns the direct URL.
+func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration) (string, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// IMPORTANT:
+	// Backend expects "files" not "files[]"
+	part, err := writer.CreateFormFile("files", fileName)
+	if err != nil {
 		return "", fmt.Errorf("failed to create form file: %w", err)
-	} else if _, err = io.Copy(part, fileBuffer); err != nil {
+	}
+
+	_, err = io.Copy(part, fileBuffer)
+	if err != nil {
 		return "", fmt.Errorf("failed to copy file content: %w", err)
 	}
 
-	_ = writer.Close()
+	err = writer.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to close multipart writer: %w", err)
+	}
 
-	req, err := http.NewRequest("POST", meowboxURL, &buf)
+	req, err := http.NewRequest("POST", meowboxURL, &body)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
+
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
+		var netErr net.Error
+
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			return "", fmt.Errorf("upload request timed out after %d seconds", int(timeout.Seconds()))
 		}
+
 		return "", fmt.Errorf("failed to connect to MeowBox: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 429 {
-		return "", fmt.Errorf("rate limit hit — too many requests, try again later")
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("rate limit hit — too many requests")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP error occurred: %s - %s", resp.Status, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		return "", fmt.Errorf(
+			"HTTP error occurred: %s - %s",
+			resp.Status,
+			string(respBody),
+		)
 	}
 
 	var result uploadResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+
+	err = json.Unmarshal(respBody, &result)
+	if err != nil {
 		return "", fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
 	if !result.Success {
-		desc := result.Description
-		if desc == "" {
-			desc = "unknown error"
+		if result.Description == "" {
+			result.Description = "unknown error"
 		}
-		return "", fmt.Errorf("upload failed: %s", desc)
+
+		return "", fmt.Errorf("upload failed: %s", result.Description)
 	}
 
 	if len(result.Files) == 0 {
@@ -90,86 +110,106 @@ func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration
 	return result.Files[0].URL, nil
 }
 
-// UploadFiles uploads multiple files to MeowBox in a single request.
-// Each file is provided as a FileEntry with its buffer and name.
-// The function returns a slice of direct URLs or an error.
+// UploadFiles uploads multiple files and returns all URLs.
 func UploadFiles(files []FileEntry, timeout time.Duration) ([]string, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no files provided")
 	}
 
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
 
-	for _, f := range files {
-		part, err := writer.CreateFormFile("files[]", f.FileName)
+	for _, file := range files {
+		// IMPORTANT:
+		// Backend expects "files" not "files[]"
+		part, err := writer.CreateFormFile("files", file.FileName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create form file for %q: %w", f.FileName, err)
+			return nil, fmt.Errorf(
+				"failed to create form file for %q: %w",
+				file.FileName,
+				err,
+			)
 		}
-		if _, err = io.Copy(part, f.Buffer); err != nil {
-			return nil, fmt.Errorf("failed to copy file content for %q: %w", f.FileName, err)
+
+		_, err = io.Copy(part, file.Buffer)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to copy file content for %q: %w",
+				file.FileName,
+				err,
+			)
 		}
 	}
 
-	_ = writer.Close()
+	err := writer.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
 
-	req, err := http.NewRequest("POST", meowboxURL, &buf)
+	req, err := http.NewRequest("POST", meowboxURL, &body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
+
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		var ne net.Error
-		if errors.As(err, &ne) && ne.Timeout() {
-			return nil, fmt.Errorf("upload request timed out after %d seconds", int(timeout.Seconds()))
+		var netErr net.Error
+
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, fmt.Errorf(
+				"upload request timed out after %d seconds",
+				int(timeout.Seconds()),
+			)
 		}
+
 		return nil, fmt.Errorf("failed to connect to MeowBox: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 429 {
-		return nil, fmt.Errorf("rate limit hit — too many requests, try again later")
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("rate limit hit — too many requests")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP error occurred: %s - %s", resp.Status, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf(
+			"HTTP error occurred: %s - %s",
+			resp.Status,
+			string(respBody),
+		)
 	}
 
 	var result uploadResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+
+	err = json.Unmarshal(respBody, &result)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
 	if !result.Success {
-		desc := result.Description
-		if desc == "" {
-			desc = "unknown error"
+		if result.Description == "" {
+			result.Description = "unknown error"
 		}
-		return nil, fmt.Errorf("upload failed: %s", desc)
+
+		return nil, fmt.Errorf("upload failed: %s", result.Description)
 	}
 
 	if len(result.Files) == 0 {
 		return nil, fmt.Errorf("upload succeeded but no file URLs returned")
 	}
 
-	urls := make([]string, 0, len(result.Files))
-	for _, f := range result.Files {
-		urls = append(urls, f.URL)
-	}
-	return urls, nil
-}
+	var urls []string
 
-// FileEntry holds a file buffer and its name for multi-file uploads.
-type FileEntry struct {
-	Buffer   *bytes.Buffer
-	FileName string
+	for _, file := range result.Files {
+		urls = append(urls, file.URL)
+	}
+
+	return urls, nil
 }
