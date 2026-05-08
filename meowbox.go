@@ -14,13 +14,10 @@ import (
 
 const meowboxURL = "https://files.tgvibes.online/upload"
 
-// uploadResponse represents the API response.
-type uploadResponse struct {
-	Success     bool   `json:"success"`
-	Description string `json:"description"`
-	Files       []struct {
-		URL string `json:"url"`
-	} `json:"files"`
+// uploadFile represents a single uploaded file response.
+type uploadFile struct {
+	URL string `json:"url"`
+	Src string `json:"src"`
 }
 
 // FileEntry holds file data for multi-upload.
@@ -31,11 +28,11 @@ type FileEntry struct {
 
 // UploadFile uploads a single file and returns the direct URL.
 func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration) (string, error) {
+
 	var body bytes.Buffer
+
 	writer := multipart.NewWriter(&body)
 
-	// IMPORTANT:
-	// Backend expects "files" not "files[]"
 	part, err := writer.CreateFormFile("files", fileName)
 	if err != nil {
 		return "", fmt.Errorf("failed to create form file: %w", err)
@@ -64,14 +61,19 @@ func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration
 
 	resp, err := client.Do(req)
 	if err != nil {
+
 		var netErr net.Error
 
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			return "", fmt.Errorf("upload request timed out after %d seconds", int(timeout.Seconds()))
+			return "", fmt.Errorf(
+				"upload request timed out after %d seconds",
+				int(timeout.Seconds()),
+			)
 		}
 
 		return "", fmt.Errorf("failed to connect to MeowBox: %w", err)
 	}
+
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
@@ -88,40 +90,44 @@ func UploadFile(fileBuffer *bytes.Buffer, fileName string, timeout time.Duration
 		)
 	}
 
-	var result uploadResponse
+	// API returns ARRAY not object
+	var result []uploadFile
 
 	err = json.Unmarshal(respBody, &result)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
-	if !result.Success {
-		if result.Description == "" {
-			result.Description = "unknown error"
-		}
-
-		return "", fmt.Errorf("upload failed: %s", result.Description)
-	}
-
-	if len(result.Files) == 0 {
+	if len(result) == 0 {
 		return "", fmt.Errorf("upload succeeded but no file URLs returned")
 	}
 
-	return result.Files[0].URL, nil
+	url := result[0].URL
+
+	if url == "" {
+		url = result[0].Src
+	}
+
+	if url == "" {
+		return "", fmt.Errorf("response missing file URL")
+	}
+
+	return url, nil
 }
 
 // UploadFiles uploads multiple files and returns all URLs.
 func UploadFiles(files []FileEntry, timeout time.Duration) ([]string, error) {
+
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no files provided")
 	}
 
 	var body bytes.Buffer
+
 	writer := multipart.NewWriter(&body)
 
 	for _, file := range files {
-		// IMPORTANT:
-		// Backend expects "files" not "files[]"
+
 		part, err := writer.CreateFormFile("files", file.FileName)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -159,6 +165,7 @@ func UploadFiles(files []FileEntry, timeout time.Duration) ([]string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+
 		var netErr net.Error
 
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -170,6 +177,7 @@ func UploadFiles(files []FileEntry, timeout time.Duration) ([]string, error) {
 
 		return nil, fmt.Errorf("failed to connect to MeowBox: %w", err)
 	}
+
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
@@ -186,29 +194,35 @@ func UploadFiles(files []FileEntry, timeout time.Duration) ([]string, error) {
 		)
 	}
 
-	var result uploadResponse
+	// API returns ARRAY not object
+	var result []uploadFile
 
 	err = json.Unmarshal(respBody, &result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
-	if !result.Success {
-		if result.Description == "" {
-			result.Description = "unknown error"
-		}
-
-		return nil, fmt.Errorf("upload failed: %s", result.Description)
-	}
-
-	if len(result.Files) == 0 {
+	if len(result) == 0 {
 		return nil, fmt.Errorf("upload succeeded but no file URLs returned")
 	}
 
 	var urls []string
 
-	for _, file := range result.Files {
-		urls = append(urls, file.URL)
+	for _, file := range result {
+
+		url := file.URL
+
+		if url == "" {
+			url = file.Src
+		}
+
+		if url != "" {
+			urls = append(urls, url)
+		}
+	}
+
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("response missing file URLs")
 	}
 
 	return urls, nil
