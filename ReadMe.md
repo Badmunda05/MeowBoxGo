@@ -7,16 +7,28 @@
 
 ## Installation
 
-In Go, GitHub itself acts as the package registry. Simply run this in your project:
+### Install package
+
+Run this inside your Go project:
 
 ```bash
-go get github.com/Badmunda05/meowbox
+go get github.com/Badmunda05/MeowBoxGo@v1.0.2
 ```
 
-Then import it in your code:
+---
+
+### Import package
 
 ```go
-import "github.com/Badmunda05/meowbox"
+import "github.com/Badmunda05/MeowBoxGo"
+```
+
+---
+
+### Or add directly in go.mod
+
+```go
+require github.com/Badmunda05/MeowBoxGo v1.0.2
 ```
 
 > **Note:** The GitHub repository must be public and the module path must match.
